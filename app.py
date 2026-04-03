@@ -405,7 +405,7 @@ def build_rag(files_data: list, company_text: str, deps: dict):
     if not all_docs:
         raise ValueError("No content to process. Please upload files or enter a company description.")
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=75)
     chunks = splitter.split_documents(all_docs)
 
     if not chunks:
@@ -418,7 +418,7 @@ def build_rag(files_data: list, company_text: str, deps: dict):
 
     chroma_dir = tempfile.mkdtemp()
     vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=chroma_dir)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
     st.session_state["vectorstore"] = vectorstore
     st.session_state["retriever"] = retriever
     st.session_state["chroma_dir"] = chroma_dir
@@ -436,68 +436,108 @@ def retrieve_context(retriever, query: str) -> str:
         return "\n\n".join(d.page_content for d in docs)
 
 
-# ── Helper: run CrewAI pipeline ───────────────────────────────────────────────
+# ── Token limit constants ────────────────────────────────────────────────────
+MAX_INPUT_CHARS = 2000   # max user input chars — hard stop if exceeded
+MAX_CTX_CHARS   = 3500   # max chars per RAG context chunk (~875 tokens)
+TOP_K           = 3      # number of RAG chunks retrieved per query
+MAX_TOKENS      = 2200   # output token ceiling per agent call
+
+
+# ── Helper: run CrewAI pipeline ──────────────────────────────────────────────
+
+
 def run_crew(retriever, company_text: str, deps: dict) -> dict:
     Agent = deps["Agent"]
     Task = deps["Task"]
     Crew = deps["Crew"]
     Process = deps["Process"]
 
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    os.environ["GROQ_API_KEY"] = groq_api_key
-    model = "groq/llama-3.3-70b-versatile"
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise ValueError("OPENAI_API_KEY not found in environment.")
+    os.environ["OPENAI_API_KEY"] = openai_api_key
+    model = "openai/gpt-4o-mini"
 
-    research_ctx = retrieve_context(retriever, "key business insights and main topics")
-    analysis_ctx = retrieve_context(retriever, "business challenges problems gaps weaknesses")
-    strategy_ctx = retrieve_context(retriever, "opportunities improvements recommendations growth")
+    research_ctx = retrieve_context(retriever, "key business insights and main topics")[:MAX_CTX_CHARS]
+    analysis_ctx = retrieve_context(retriever, "business challenges problems gaps weaknesses")[:MAX_CTX_CHARS]
+    strategy_ctx = retrieve_context(retriever, "opportunities improvements recommendations growth")[:MAX_CTX_CHARS]
+
+    # Truncate company text if it exceeds the per-request input limit
+    if len(company_text) > MAX_INPUT_CHARS:
+        company_text = company_text[:MAX_INPUT_CHARS]
 
     subject = company_text[:300] if company_text.strip() else "the uploaded documents"
 
+    # Shared LLM config — enforces output token ceiling on every call
+    llm_cfg = {"model": model, "max_tokens": MAX_TOKENS}
+
     research_agent = Agent(
         role="Senior Research Analyst",
-        goal="Extract concise, scannable key insights from business documents.",
-        backstory=(
-            "You are an expert research analyst. You write short, punchy bullet points only. "
-            "You never write paragraphs. Every insight is one clear sentence."
+        goal=(
+            "Extract 3–5 high-value key insights from business documents. "
+            "Output as a tight bullet list. Each bullet must be one sentence "
+            "(≤ 20 words). Focus on facts, numbers, and strategic signals only."
         ),
-        llm=model,
+        backstory=(
+            "You are a sharp research analyst who distils complex documents into "
+            "the fewest, most impactful insights. You never pad output. "
+            "Bullets only — no headings, no paragraphs."
+        ),
+        llm=llm_cfg,
         verbose=False,
         allow_delegation=False,
     )
 
     analysis_agent = Agent(
         role="Business Analysis Expert",
-        goal="Identify and structure business pain points in a table-ready format.",
-        backstory=(
-            "You are a business analyst who outputs structured data only. "
-            "You always format findings as: Problem | Impact | Priority. "
-            "No paragraphs. No extra commentary."
+        goal=(
+            "Identify exactly 5 business pain points from the context. "
+            "For each, output: PROBLEM, IMPACT, PRIORITY. "
+            "Keep descriptions short (≤ 15 words per field). No extra commentary."
         ),
-        llm=model,
+        backstory=(
+            "You are a business analyst who surfaces structured pain points. "
+            "You output concise, table-ready blocks. No intro text, no padding."
+        ),
+        llm=llm_cfg,
         verbose=False,
         allow_delegation=False,
     )
 
     strategy_agent = Agent(
         role="Strategic Consultant",
-        goal="Produce concise, actionable strategy blocks with clear titles and bullet steps.",
-        backstory=(
-            "You are a management consultant who writes short, structured strategy cards. "
-            "Each card has a title and 2-3 action bullet points. No paragraphs."
+        goal=(
+            "Recommend exactly 5 actionable strategies. "
+            "Each strategy: FIX title + 2 action bullets + OUTCOME sentence. "
+            "Aim for clarity and brevity. Skip any preamble."
         ),
-        llm=model,
+        backstory=(
+            "You are a management consultant who writes crisp strategy cards. "
+            "Every card delivers a title, two concrete actions, and one outcome. "
+            "No paragraphs, no repetition."
+        ),
+        llm=llm_cfg,
         verbose=False,
         allow_delegation=False,
     )
 
     content_agent = Agent(
         role="Professional Content Writer",
-        goal="Generate a short summary, a concise professional email, and a structured report.",
-        backstory=(
-            "You are a business writer who formats everything clearly with headings. "
-            "You write concisely. Each deliverable is clearly separated."
+        goal=(
+            "Produce a structured report with exactly five sections: "
+            "(1) Summary — short paragraph, "
+            "(2) Key Insights — 3–5 bullets, "
+            "(3) Pain Points — 5 bullets, "
+            "(4) Strategies — 5 bullets, "
+            "(5) Email — max 150 words. "
+            "Use the exact section markers provided. Stay concise throughout."
         ),
-        llm=model,
+        backstory=(
+            "You are a business writer who assembles polished, token-efficient reports. "
+            "You follow section markers exactly, avoid repetition, and never exceed "
+            "the requested length for any section."
+        ),
+        llm=llm_cfg,
         verbose=False,
         allow_delegation=False,
     )
@@ -563,37 +603,45 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
 
     content_task = Task(
         description=(
-            "Using all prior agent outputs, produce THREE clearly separated deliverables.\n\n"
-            "Use EXACTLY these section markers (copy them verbatim):\n\n"
+            "Using all prior agent outputs, produce a structured report with "
+            "EXACTLY FIVE sections. Copy the section markers verbatim.\n\n"
             "===SUMMARY===\n"
-            "- [Bullet point 1]\n"
-            "- [Bullet point 2]\n"
-            "- [Bullet point 3]\n"
-            "- [Bullet point 4]\n"
-            "- [Bullet point 5]\n\n"
+            "[One short paragraph — 3–4 sentences capturing the business situation.]\n\n"
+            "===KEY INSIGHTS===\n"
+            "- [Insight 1]\n"
+            "- [Insight 2]\n"
+            "- [Insight 3]\n"
+            "(3–5 bullets, each ≤ 20 words)\n\n"
+            "===PAIN POINTS===\n"
+            "- [Pain point 1]\n"
+            "- [Pain point 2]\n"
+            "- [Pain point 3]\n"
+            "- [Pain point 4]\n"
+            "- [Pain point 5]\n"
+            "(Exactly 5 bullets, each ≤ 20 words)\n\n"
+            "===STRATEGIES===\n"
+            "- [Strategy 1]\n"
+            "- [Strategy 2]\n"
+            "- [Strategy 3]\n"
+            "- [Strategy 4]\n"
+            "- [Strategy 5]\n"
+            "(Exactly 5 bullets, each ≤ 20 words)\n\n"
             "===EMAIL===\n"
             "Subject: [Email subject line]\n\n"
             "Dear [Stakeholder],\n\n"
-            "[Email body - max 120 words. Mention top findings and one clear call to action.]\n\n"
+            "[Up to 150 words. Cover top finding, key risk, and one call to action.]\n\n"
             "Best regards,\n"
             "[Your Name]\n\n"
-            "===REPORT===\n"
-            "## Executive Summary\n"
-            "[2-3 sentences]\n\n"
-            "## Key Findings\n"
-            "[Bullet list, max 5 points]\n\n"
-            "## Pain Points\n"
-            "[Bullet list, max 5 points]\n\n"
-            "## Strategic Recommendations\n"
-            "[Bullet list, max 5 points]\n\n"
-            "## Conclusion\n"
-            "[2-3 sentences]\n\n"
-            "RULES:\n"
-            "- Use the exact section markers above\n"
-            "- Keep each section concise\n"
-            "- No repetition across sections"
+            "TOKEN RULES:\n"
+            "- Total output must stay well under 2000 tokens\n"
+            "- Use the exact section markers above — no extra headings\n"
+            "- No repetition across sections\n"
+            "- Skip any section intro text; go straight to content"
         ),
-        expected_output="Three deliverables separated by ===SUMMARY===, ===EMAIL===, and ===REPORT=== markers.",
+        expected_output=(
+            "Five sections: ===SUMMARY===, ===KEY INSIGHTS===, ===PAIN POINTS===, "
+            "===STRATEGIES===, ===EMAIL=== — each concise and within token limits."
+        ),
         agent=content_agent,
         context=[research_task, analysis_task, strategy_task],
     )
@@ -664,6 +712,7 @@ def parse_strategies(text: str) -> list:
 
 
 def parse_content_sections(text: str) -> dict:
+    """Extract the five structured sections from the content agent output."""
     def extract(marker_start, marker_end=None):
         if marker_end:
             pattern = rf"==={marker_start}===\s*(.*?)\s*==={marker_end}==="
@@ -673,9 +722,11 @@ def parse_content_sections(text: str) -> dict:
         return m.group(1).strip() if m else ""
 
     return {
-        "summary": extract("SUMMARY", "EMAIL"),
-        "email": extract("EMAIL", "REPORT"),
-        "report": extract("REPORT"),
+        "summary":      extract("SUMMARY",      "KEY INSIGHTS"),
+        "key_insights": extract("KEY INSIGHTS",  "PAIN POINTS"),
+        "pain_points":  extract("PAIN POINTS",   "STRATEGIES"),
+        "strategies":   extract("STRATEGIES",    "EMAIL"),
+        "email":        extract("EMAIL"),
     }
 
 
@@ -852,9 +903,9 @@ def page_input():
     )
     st.markdown(_hero_html, unsafe_allow_html=True)
 
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        st.error("GROQ_API_KEY not found in environment. Please check your .env file.")
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key:
+        st.error("OPENAI_API_KEY not found in environment. Please set it in your .env file.")
         return
 
     # Two-column layout — matching PNG exactly
@@ -869,6 +920,30 @@ def page_input():
             accept_multiple_files=True,
             label_visibility="collapsed",
         )
+        # ── Clean file preview (no black box) ────────────────────────────────
+        if uploaded:
+            for uf in uploaded:
+                ext = Path(uf.name).suffix.lower()
+                if ext == ".txt":
+                    try:
+                        preview = uf.read().decode("utf-8", errors="replace")
+                        uf.seek(0)  # reset pointer for later processing
+                        preview_lines = preview.splitlines()[:20]
+                        st.markdown(
+                            f"**📄 {uf.name}** — preview (first 20 lines):",
+                        )
+                        st.markdown(
+                            "<div style='background:#f0faf9;border-radius:10px;"
+                            "padding:12px 16px;color:#1a3a38;font-size:0.85rem;"
+                            "white-space:pre-wrap;line-height:1.6;'>"
+                            + "<br>".join(l.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") for l in preview_lines)
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    except Exception:
+                        st.markdown(f"**📄 {uf.name}** uploaded successfully.")
+                else:
+                    st.markdown(f"**📄 {uf.name}** uploaded successfully.")
 
     with col2:
         st.markdown('<p class="section-heading">Company Description</p>', unsafe_allow_html=True)
@@ -890,7 +965,15 @@ def page_input():
             st.error("Please upload at least one document or enter a company description.")
             return
 
-        with st.spinner("Analyzing, please wait..."):
+        # ── Hard input size safeguard ─────────────────────────────────────────
+        if len(company_text) > MAX_INPUT_CHARS:
+            st.warning(
+                f"⚠️ Company description exceeds {MAX_INPUT_CHARS} characters "
+                f"({len(company_text)} entered). Please shorten it and try again."
+            )
+            return
+
+        with st.spinner("🔍 Analyzing your business — this may take 1–2 minutes..."):
             st.session_state["uploaded_files_data"] = [(f.name, f.read()) for f in (uploaded or [])]
             st.session_state["company_text"] = company_text
             st.session_state["results"] = None
@@ -902,7 +985,7 @@ def page_input():
                 st.info(
                     "Run: pip install streamlit langchain langchain-community "
                     "langchain-huggingface crewai chromadb sentence-transformers pypdf docx2txt "
-                    "reportlab python-docx langchain-groq python-dotenv langchain-text-splitters"
+                    "reportlab python-docx openai langchain-openai python-dotenv langchain-text-splitters"
                 )
                 return
 
@@ -1031,31 +1114,35 @@ def page_results():
         sections = parse_content_sections(content_out)
         has_parsed = any(sections.values())
 
-        tab_summary, tab_email, tab_report = st.tabs(["Summary", "Email", "Full Report"])
+        tab_summary, tab_insights, tab_email = st.tabs(["Summary", "Key Insights & Pain Points", "Email"])
 
         with tab_summary:
             summary_text = sections.get("summary", "") if has_parsed else ""
             if summary_text:
-                lines = [l.strip() for l in summary_text.splitlines() if l.strip()]
-                bullets = [l for l in lines if l.startswith("-") or l.startswith("*") or l.startswith("•")]
-                display = bullets if bullets else lines
-                for line in display[:5]:
-                    clean = re.sub(r"^[-*•]\s*", "", line)
-                    st.markdown(f"- {clean}")
+                st.markdown(summary_text)
             else:
+                st.markdown(content_out)
+
+        with tab_insights:
+            ki_text = sections.get("key_insights", "") if has_parsed else ""
+            pp_text = sections.get("pain_points", "") if has_parsed else ""
+            strat_text = sections.get("strategies", "") if has_parsed else ""
+            if ki_text:
+                st.markdown("**Key Insights**")
+                st.markdown(ki_text)
+            if pp_text:
+                st.markdown("**Pain Points**")
+                st.markdown(pp_text)
+            if strat_text:
+                st.markdown("**Strategies**")
+                st.markdown(strat_text)
+            if not ki_text and not pp_text and not strat_text:
                 st.markdown(content_out)
 
         with tab_email:
             email_text = sections.get("email", "") if has_parsed else ""
             if email_text:
                 st.markdown(email_text)
-            else:
-                st.markdown(content_out)
-
-        with tab_report:
-            report_text = sections.get("report", "") if has_parsed else ""
-            if report_text:
-                st.markdown(report_text)
             else:
                 st.markdown(content_out)
     else:
