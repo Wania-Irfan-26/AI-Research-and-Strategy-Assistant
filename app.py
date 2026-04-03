@@ -306,9 +306,18 @@ button[kind="primary"]:hover {{
 }}
 
 /* Scoped: download button text stays white */
-.results-page [data-testid="stDownloadButton"] button {{
+.results-page [data-testid="stDownloadButton"] button {
     color: #ffffff !important;
-}}
+}
+
+/* ── Spinner text ────────────────────────────────────────── */
+[data-testid="stSpinner"] {
+    color: #1A7A72 !important;
+    font-weight: bold !important;
+}
+[data-testid="stSpinner"] > div > div > div {
+    color: #1A7A72 !important;
+}
 </style>
 """
 
@@ -325,7 +334,7 @@ def load_heavy_deps():
             Docx2txtLoader,
         )
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain_openai import OpenAIEmbeddings
         from langchain_community.vectorstores import Chroma
         from langchain_core.documents import Document
         from crewai import Agent, Task, Crew, Process
@@ -335,7 +344,7 @@ def load_heavy_deps():
             "TextLoader": TextLoader,
             "Docx2txtLoader": Docx2txtLoader,
             "RecursiveCharacterTextSplitter": RecursiveCharacterTextSplitter,
-            "HuggingFaceEmbeddings": HuggingFaceEmbeddings,
+            "OpenAIEmbeddings": OpenAIEmbeddings,
             "Chroma": Chroma,
             "Document": Document,
             "Agent": Agent,
@@ -372,7 +381,7 @@ def build_rag(files_data: list, company_text: str, deps: dict):
     TextLoader = deps["TextLoader"]
     Docx2txtLoader = deps["Docx2txtLoader"]
     RecursiveCharacterTextSplitter = deps["RecursiveCharacterTextSplitter"]
-    HuggingFaceEmbeddings = deps["HuggingFaceEmbeddings"]
+    OpenAIEmbeddings = deps["OpenAIEmbeddings"]
     Chroma = deps["Chroma"]
     Document = deps["Document"]
 
@@ -411,10 +420,7 @@ def build_rag(files_data: list, company_text: str, deps: dict):
     if not chunks:
         raise ValueError("Text splitting produced no chunks. Please check your input.")
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={"token": os.environ.get("HF_TOKEN")},
-    )
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
     chroma_dir = tempfile.mkdtemp()
     vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=chroma_dir)
@@ -920,30 +926,10 @@ def page_input():
             accept_multiple_files=True,
             label_visibility="collapsed",
         )
-        # ── Clean file preview (no black box) ────────────────────────────────
+        # ── Clean file preview (disabled per request) ──────────────────────
         if uploaded:
             for uf in uploaded:
-                ext = Path(uf.name).suffix.lower()
-                if ext == ".txt":
-                    try:
-                        preview = uf.read().decode("utf-8", errors="replace")
-                        uf.seek(0)  # reset pointer for later processing
-                        preview_lines = preview.splitlines()[:20]
-                        st.markdown(
-                            f"**📄 {uf.name}** — preview (first 20 lines):",
-                        )
-                        st.markdown(
-                            "<div style='background:#f0faf9;border-radius:10px;"
-                            "padding:12px 16px;color:#1a3a38;font-size:0.85rem;"
-                            "white-space:pre-wrap;line-height:1.6;'>"
-                            + "<br>".join(l.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") for l in preview_lines)
-                            + "</div>",
-                            unsafe_allow_html=True,
-                        )
-                    except Exception:
-                        st.markdown(f"**📄 {uf.name}** uploaded successfully.")
-                else:
-                    st.markdown(f"**📄 {uf.name}** uploaded successfully.")
+                st.markdown(f"**📄 {uf.name}** uploaded successfully.")
 
     with col2:
         st.markdown('<p class="section-heading">Company Description</p>', unsafe_allow_html=True)
@@ -984,7 +970,7 @@ def page_input():
                 st.error(f"Dependency import failed: {deps['error']}")
                 st.info(
                     "Run: pip install streamlit langchain langchain-community "
-                    "langchain-huggingface crewai chromadb sentence-transformers pypdf docx2txt "
+                    "crewai chromadb pypdf docx2txt "
                     "reportlab python-docx openai langchain-openai python-dotenv langchain-text-splitters"
                 )
                 return
