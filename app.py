@@ -171,6 +171,11 @@ button[kind="primary"]:hover {{
     background: #145f58 !important;
 }}
 
+/* Force text inside the specific primary button to be white */
+.stButton > button[kind="primary"] * {
+    color: #ffffff !important;
+}
+
 /* ── Secondary / back button ─────────────────────────────── */
 [data-testid="stBaseButton-secondary"] button {{
     background-color: transparent !important;
@@ -1069,7 +1074,7 @@ def page_results():
                 c = colours.get(val.strip(), "#888888")
                 return f"color: {c}; font-weight: bold;"
 
-            styled = df.style.applymap(colour_priority, subset=["Priority"])
+            styled = df.style.map(colour_priority, subset=["Priority"])
             st.dataframe(styled, use_container_width=True, hide_index=True)
         else:
             st.markdown(analysis_out)
