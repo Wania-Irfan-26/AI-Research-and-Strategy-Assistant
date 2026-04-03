@@ -306,18 +306,18 @@ button[kind="primary"]:hover {{
 }}
 
 /* Scoped: download button text stays white */
-.results-page [data-testid="stDownloadButton"] button {
+.results-page [data-testid="stDownloadButton"] button {{
     color: #ffffff !important;
-}
+}}
 
 /* ── Spinner text ────────────────────────────────────────── */
-[data-testid="stSpinner"] {
+[data-testid="stSpinner"] {{
     color: #1A7A72 !important;
     font-weight: bold !important;
-}
-[data-testid="stSpinner"] > div > div > div {
+}}
+[data-testid="stSpinner"] > div > div > div {{
     color: #1A7A72 !important;
-}
+}}
 </style>
 """
 
