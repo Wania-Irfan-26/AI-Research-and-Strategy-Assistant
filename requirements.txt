@@ -3,12 +3,11 @@ torch==2.2.2+cpu
 streamlit>=1.32.0
 langchain-community>=0.2.0
 langchain-core>=0.2.0
-langchain-huggingface>=0.1.0
-langchain-groq>=0.1.0
+openai>=1.30.0
+langchain-openai>=0.1.0
 langchain-text-splitters>=0.2.0
 crewai[litellm]>=0.51.0
 chromadb>=0.5.0
-sentence-transformers>=2.7.0
 pypdf>=4.1.0
 docx2txt>=0.8
 reportlab>=4.0.0
