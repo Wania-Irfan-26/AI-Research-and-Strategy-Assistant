@@ -172,9 +172,9 @@ button[kind="primary"]:hover {{
 }}
 
 /* Force text inside the specific primary button to be white */
-.stButton > button[kind="primary"] * {
+.stButton > button[kind="primary"] * {{
     color: #ffffff !important;
-}
+}}
 
 /* ── Secondary / back button ─────────────────────────────── */
 [data-testid="stBaseButton-secondary"] button {{
