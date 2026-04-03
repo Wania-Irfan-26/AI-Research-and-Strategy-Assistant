@@ -265,8 +265,16 @@ button[kind="primary"]:hover {{
 .results-page div[data-testid="stMarkdownContainer"] ol,
 .results-page .stMarkdown p,
 .results-page .stMarkdown li,
-.results-page .stMarkdown span,
 .results-page div[data-testid="stCaptionContainer"] span {{
+    color: #1a1a1a !important;
+}}
+
+/* Force all standard markdown text (including in tabs) to be dark */
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span,
+[data-testid="stMarkdownContainer"] ul,
+[data-testid="stMarkdownContainer"] ol {{
     color: #1a1a1a !important;
 }}
 
