@@ -475,7 +475,12 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
     subject = company_text[:300] if company_text.strip() else "the uploaded documents"
 
     # Shared LLM config — enforces output token ceiling on every call
-    llm_cfg = {"model": model, "max_tokens": MAX_TOKENS}
+    # We use ChatOpenAI so liteLLM doesn't complain about the dictionary format
+    from langchain_openai import ChatOpenAI
+    llm_instance = ChatOpenAI(
+        model="gpt-4o-mini",
+        max_tokens=MAX_TOKENS,
+    )
 
     research_agent = Agent(
         role="Senior Research Analyst",
@@ -489,7 +494,7 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
             "the fewest, most impactful insights. You never pad output. "
             "Bullets only — no headings, no paragraphs."
         ),
-        llm=llm_cfg,
+        llm=llm_instance,
         verbose=False,
         allow_delegation=False,
     )
@@ -505,7 +510,7 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
             "You are a business analyst who surfaces structured pain points. "
             "You output concise, table-ready blocks. No intro text, no padding."
         ),
-        llm=llm_cfg,
+        llm=llm_instance,
         verbose=False,
         allow_delegation=False,
     )
@@ -522,7 +527,7 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
             "Every card delivers a title, two concrete actions, and one outcome. "
             "No paragraphs, no repetition."
         ),
-        llm=llm_cfg,
+        llm=llm_instance,
         verbose=False,
         allow_delegation=False,
     )
@@ -543,7 +548,7 @@ def run_crew(retriever, company_text: str, deps: dict) -> dict:
             "You follow section markers exactly, avoid repetition, and never exceed "
             "the requested length for any section."
         ),
-        llm=llm_cfg,
+        llm=llm_instance,
         verbose=False,
         allow_delegation=False,
     )
@@ -926,10 +931,6 @@ def page_input():
             accept_multiple_files=True,
             label_visibility="collapsed",
         )
-        # ── Clean file preview (disabled per request) ──────────────────────
-        if uploaded:
-            for uf in uploaded:
-                st.markdown(f"**📄 {uf.name}** uploaded successfully.")
 
     with col2:
         st.markdown('<p class="section-heading">Company Description</p>', unsafe_allow_html=True)
